@@ -1,0 +1,232 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'yaml'
+require 'pstore'
+require 'net/http'
+require 'mechanize'
+require 'trollop'
+
+# Config file helper
+class KConfig
+  @@config = YAML::load_file("kash.config");
+  
+  def self.templates()
+    return @@config['templates']
+  end
+  
+  def self.template(name)
+    @@config['templates'].each do |value|
+      if value['name'] == name
+        return value
+      end
+    end
+    return nil
+  end
+  
+  def self.targets()
+    return @@config['targets']
+  end
+  
+  def self.get(key)
+    return @@config[key]
+  end
+end
+
+# Implements the Kayako interfacing
+class Kayako
+  @agent = nil
+  @server = nil
+  @username = nil
+  @password = nil
+  
+  def initialize(server, username, password)
+    @agent = Mechanize.new
+    
+    @server = server
+    @username = username
+    @password = password
+    
+    login
+  end
+  
+  def clear_cache()
+    get_page("Base/Diagnostics/RebuildCache")
+  end
+  
+  def update_template(id, content)
+    p = get_page("Base/Template/Edit/#{id}");
+    p.form_with(:name => 'View_Templateform') do |f|
+      f['templatecontents'] = content
+    end.click_button
+  end
+  
+  def list_templates()
+    templates = get_templates
+    
+    templates.each do |link|
+      puts " - name: #{link[:name]}"
+      puts "   id: #{link[:id]}"
+    end
+  end
+  
+  def get_templates()
+    templates = Array.new
+    p = get_page("/Base/Template/Manage");
+    
+    p.links_with(:href => %r{.*Base/Template/Edit.*}).each do |link|
+      templates << {
+        'name' => link.text,
+        'href' => link.href,
+        'id' =>  link.href.match('.*\/(\d*)')[1]}
+    end
+    
+    return templates
+  end
+  
+  def get_template_content(id)
+    p = get_page("Base/Template/Edit/#{id}");
+    
+    puts id
+    p.form_with(:name => 'View_Templateform') do |f|
+      return f.templatecontents
+    end
+    
+  end
+  
+  #
+  # private functions here:
+  #
+  private
+  def get_page(path)
+    return @agent.get("http://#{@server}/admin/#{path}")
+  end
+  
+  def login()
+    page = get_page('')
+    
+    # Submit the login form
+    page.form_with(:name => 'loginform') do |f|
+      # Check if allready logged in
+      #if defined? f.username 
+        f.username = @username
+        f.password = @password
+      #end
+    end.click_button
+  end
+end
+
+# Handle templates
+class KTemplateEngine
+  def self.update_templates(kayako)
+    # TODO - Check which templates have been changed since last update
+    KConfig.templates.each { |value|
+      puts "Updating template #{value['name']}"
+    }
+  end
+  
+  def self.update_template(kayako, template)
+    # Read content from file
+    
+    puts template.inspect
+    
+    extension = 'tmpl' #defined? template['extension'] ? template['extension'] : 'tmpl'
+    file = File.new("#{KConfig.get('templatesdir')}/#{template['name']}.#{extension}", "r")
+    content = ''
+    while (line = file.gets)
+      content += line
+    end
+    file.close
+    
+    puts content
+    
+    kayako.update_template(template['id'], content)
+  end
+  
+  def self.list_templates(kayako)
+    kayako.list_templates
+  end
+  
+  def self.export(kayako, template)
+    templates_dir = "#{KConfig.get('templatesdir')}"
+    FileUtils.mkdir_p(templates_dir)
+    
+    puts template.inspect
+    
+    # Download content of the template:
+    content = kayako.get_template_content(template['id'])
+    
+    # write to file:
+    # Do not overwrite
+    filename = "#{templates_dir}/#{template['name']}.tmpl"
+    if File.exists?(filename)
+      puts "#{filename} allready exists. Won't overwrite"
+    else
+      File.open("#{filename}", 'w') {|f| f.write(content) }
+      puts "Exported #{template['name']}"
+    end
+  end
+  
+  def self.exportAll(kayako)
+    kayako.get_templates.each do |template|
+      self.export(kayako, template)
+    end
+  end
+end
+
+t1 = Time.now
+
+SUB_COMMANDS = %w(export update list cc)
+global_opts = Trollop::options do
+  banner "Kayako command line tool. Usage: kayako [options] <export|update|list|cc>"
+  opt :dryrun, "Don't actually do anything", :short => "-d"
+  stop_on SUB_COMMANDS
+end
+
+cmd = ARGV.shift
+opts = case cmd
+  when "update"
+    Trollop::options do
+      opt :name, "Name of template to update", :short => '-n', :type => :string
+    end
+  when "export"
+    Trollop::options do
+      opt :name, "Name of template to export", :short => '-n', :type => :string
+    end
+  when "list" 
+    Trollop::options do
+      opt :double, "Copy twice for safety's sake"
+    end
+  else
+    #Trollop::help
+    #Trollop::die "unknown subcommand #{cmd.inspect}"
+  end
+
+
+# Log in to kayako server:
+value = KConfig.targets[0]
+puts "Logging into #{value['name']} (#{value['user']}@#{value['url']})"
+kayako = Kayako.new(value['url'], value['user'], value['pwd'])
+
+case cmd
+  when "export"
+    if opts[:name]
+      fname = opts[:name]      
+      KTemplateEngine.export(kayako, KConfig.template(fname))
+    else
+      KTemplateEngine.exportAll(kayako) 
+    end
+  when "update"
+    # Which template:
+    fname = opts[:name]
+    fname = fname.chomp(File.extname(fname))
+    KTemplateEngine.update_template(kayako, KConfig.template(fname))
+  when "list"
+    KTemplateEngine.list_templates(kayako)
+  when "cc"
+    kayako.clear_cache
+end
+
+
+t2 = Time.now
+puts "Kash completed in #{(t2 - t1)} seconds"
