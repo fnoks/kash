@@ -2,8 +2,6 @@
 
 require 'rubygems'
 require 'yaml'
-require 'pstore'
-require 'net/http'
 require 'mechanize'
 require 'trollop'
 
@@ -65,8 +63,8 @@ class Kayako
     templates = get_templates
     
     templates.each do |link|
-      puts " - name: #{link[:name]}"
-      puts "   id: #{link[:id]}"
+      puts " - name: #{link['name']}"
+      puts "   id: #{link['id']}"
     end
   end
   
