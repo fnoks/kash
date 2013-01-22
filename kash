@@ -56,6 +56,7 @@ class Kayako
     p = get_page("Base/Template/Edit/#{id}");
     p.form_with(:name => 'View_Templateform') do |f|
       f['templatecontents'] = content
+      f['saveasnewversion'] = 0
     end.click_button
   end
   
@@ -97,7 +98,7 @@ class Kayako
   #
   private
   def get_page(path)
-    return @agent.get("http://#{@server}/admin/#{path}")
+    return @agent.get("http://#{@server}/admin/index.php?#{path}")
   end
   
   def login()
@@ -115,28 +116,18 @@ class Kayako
 end
 
 # Handle templates
-class KTemplateEngine
-  def self.update_templates(kayako)
-    # TODO - Check which templates have been changed since last update
-    KConfig.templates.each { |value|
-      puts "Updating template #{value['name']}"
-    }
-  end
-  
+class KTemplateEngine  
   def self.update_template(kayako, template)
+    puts "Updating template #{template['name']}" 
+    
     # Read content from file
-    
-    puts template.inspect
-    
-    extension = 'tmpl' #defined? template['extension'] ? template['extension'] : 'tmpl'
+    extension = 'tmpl' #defined? template['extension'] ? template['extension'] : 'tmpl'1
     file = File.new("#{KConfig.get('templatesdir')}/#{template['name']}.#{extension}", "r")
     content = ''
     while (line = file.gets)
       content += line
     end
     file.close
-    
-    puts content
     
     kayako.update_template(template['id'], content)
   end
@@ -216,9 +207,11 @@ case cmd
     end
   when "update"
     # Which template:
-    fname = opts[:name]
-    fname = fname.chomp(File.extname(fname))
-    KTemplateEngine.update_template(kayako, KConfig.template(fname))
+    fnames = opts[:name]
+    
+    fnames.split(',').each do | fname |      
+      KTemplateEngine.update_template(kayako, KConfig.template(File.basename(fname, '.tmpl')))
+    end
   when "list"
     KTemplateEngine.list_templates(kayako)
   when "cc"
